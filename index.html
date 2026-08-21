@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sleeper AI">
+<title>Sleeper AI Draft</title>
+<link rel="manifest" href="manifest.json">
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#f8fafc;background:#0b1020}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#0b1020,#111827);min-height:100vh}
+.wrap{max-width:650px;margin:auto;padding:env(safe-area-inset-top) 14px 28px}
+header{padding:18px 4px 10px}.eyebrow{font-size:12px;color:#94a3b8}.title{font-size:25px;font-weight:800;margin-top:4px}
+.card{background:#151d2f;border:1px solid #26334d;border-radius:18px;padding:16px;margin:10px 0;box-shadow:0 8px 25px #0003}
+.clock{border-color:#16a34a;background:#10231a}.label{font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em}
+.player{font-size:30px;font-weight:850;margin:5px 0}.pos{font-size:17px;color:#cbd5e1}
+.score{font-size:42px;font-weight:850}.reason{color:#cbd5e1;line-height:1.4}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat{background:#0f172a;border-radius:12px;padding:10px}.stat b{display:block;font-size:18px}.stat span{font-size:11px;color:#94a3b8}
+button{width:100%;padding:13px;border:0;border-radius:12px;background:#334155;color:#fff;font-weight:700;font-size:15px}
+table{width:100%;border-collapse:collapse}td{padding:9px 4px;border-bottom:1px solid #26334d;font-size:14px}td:last-child{text-align:right;font-weight:700}
+.small{font-size:12px;color:#94a3b8}.error{color:#fca5a5}.green{color:#86efac}.yellow{color:#fde68a}
+</style>
+</head>
+<body><div class="wrap">
+<header><div class="eyebrow">LIVE FANTASY FOOTBALL</div><div class="title">Sleeper AI Draft Assistant</div><div class="small">Team: mdeland</div></header>
+<div id="app"><div class="card">Connecting to Sleeper…</div></div>
+</div>
+<script>
+const DRAFT_ID="1389392838025826305";
+const API="https://api.sleeper.app/v1";
+let players={};
+
+async function get(path){const r=await fetch(API+path);if(!r.ok)throw new Error("Sleeper API error");return r.json()}
+function pname(p){return p.full_name || `${p.first_name||""} ${p.last_name||""}`.trim()}
+const ADP={"Jahmyr Gibbs":1.7,"Bijan Robinson":1.5,"Ja'Marr Chase":3.4,"Puka Nacua":4,
+"Christian McCaffrey":6,"Jaxon Smith-Njigba":5,"Amon-Ra St. Brown":8,"CeeDee Lamb":14,
+"Justin Jefferson":13,"Malik Nabers":32,"Jonathan Taylor":18,"Saquon Barkley":12,
+"De'Von Achane":10,"Ashton Jeanty":15,"Derrick Henry":28,"Drake London":20,
+"Nico Collins":22,"Brian Thomas Jr.":30,"Trey McBride":20,"Brock Bowers":25,
+"Sam LaPorta":35,"Jalen Hurts":40,"Lamar Jackson":45,"Josh Allen":35,"Jayden Daniels":55};
+const BASE={WR:84,RB:82,TE:74,QB:72,K:30,DEF:30};
+function score(p,counts,avail,round,nextPick,teams){
+ let s=BASE[p.pos]||40, adp=ADP[p.name];
+ if(adp!=null)s+=.55*Math.max(0,100-adp*.72);
+ const target={QB:1,RB:2,WR:2,TE:1,K:1,DEF:1}[p.pos]||0;
+ if((counts[p.pos]||0)<target)s+=10;
+ if(p.pos==="QB"&&round<=6&&(counts.QB||0)===0)s-=7;
+ if((p.pos==="K"||p.pos==="DEF")&&round<12)s-=35;
+ const n=avail.filter(x=>x.pos===p.pos).length;
+ if(n<=6)s+=14; else if(n<=10)s+=10; else if(n<=15)s+=6; else if(n<=25)s+=2;
+ if(adp!=null){if(adp<nextPick+5)s+=6;if(adp>nextPick+25)s-=3}
+ if(p.pos==="QB"&&round<=5&&adp!=null&&adp>25)s-=12;
+ return Math.round(s*10)/10;
+}
+async function refresh(){
+ try{
+  const [draft,picks,plist]=await Promise.all([get(`/draft/${DRAFT_ID}`),get(`/draft/${DRAFT_ID}/picks`),get("/players/nfl")]);
+  players=plist;
+  const league=await get(`/league/${draft.league_id}`);
+  const users=await get(`/league/${draft.league_id}/users`);
+  const rosters=await get(`/league/${draft.league_id}/rosters`);
+  const me=users.find(u=>(u.username||"").toLowerCase()==="mdeland");
+  const mine=rosters.find(r=>me&&r.owner_id===me.user_id);
+  const picked=new Set(picks.map(x=>String(x.player_id)));
+  const all=Object.entries(players).map(([id,p])=>({id,name:pname(p),pos:p.position,team:p.team||"FA"}))
+   .filter(p=>["QB","RB","WR","TE","K","DEF"].includes(p.pos));
+  const avail=all.filter(p=>!picked.has(p.id));
+  const roster=all.filter(p=>new Set((mine?.players||[]).map(String)).has(p.id));
+  const counts={};roster.forEach(p=>counts[p.pos]=(counts[p.pos]||0)+1);
+  const teams=Number(draft.settings?.teams||league.total_rosters||12);
+  const next=picks.length+1,round=Math.floor((next-1)/teams)+1;
+  let slot=(next-1)%teams;if(round%2===0)slot=teams-1-slot;
+  let myslot=null;for(const [k,v] of Object.entries(draft.draft_order||{}))if(mine&&String(v)===String(mine.roster_id))myslot=Number(k);
+  const onClock=myslot!=null&&slot+1===myslot;
+  let until=teams;if(myslot!=null){if(onClock)until=0;else if(slot+1<myslot)until=myslot-slot-1;else until=teams-slot-1+myslot}
+  const ranked=avail.map(p=>({p,s:score(p,counts,avail,round,until,teams)})).sort((a,b)=>b.s-a.s);
+  const best=ranked[0];
+  const html=`<div class="card ${onClock?"clock":""}">
+    <div class="label">${onClock?"🟢 YOU ARE ON THE CLOCK":"⏳ WAITING"} • Round ${round}</div>
+    <div class="player">${best?.p.name||"No player"}</div>
+    <div class="pos">${best?.p.pos||""} • ${best?.p.team||""}</div>
+    <div class="score">${best?.s||0}<span style="font-size:16px"> / 100</span></div>
+    <div class="reason">V2 score combines market value, positional scarcity, roster needs, round timing and falling-player value.</div>
+  </div>
+  <div class="grid">
+   <div class="stat"><b>${picks.length}</b><span>PICKS MADE</span></div>
+   <div class="stat"><b>${until===0?"NOW":until}</b><span>UNTIL YOU PICK</span></div>
+   <div class="stat"><b>${roster.length}</b><span>YOUR PLAYERS</span></div>
+  </div>
+  <div class="card"><div class="label">Your roster</div>${roster.length?`<table>${roster.map(p=>`<tr><td>${p.pos}</td><td>${p.name}</td></tr>`).join("")}</table>`:"<p class=small>No picks yet.</p>"}</div>
+  <div class="card"><div class="label">Top available</div><table>${ranked.slice(0,10).map((x,i)=>`<tr><td>${i+1}. ${x.p.name}</td><td>${x.p.pos} • ${x.s}</td></tr>`).join("")}</table></div>
+  <button onclick="refresh()">↻ Refresh now</button><p class="small">Auto-refreshing every 10 seconds. Data is read-only; make the pick in Sleeper.</p>`;
+  document.getElementById("app").innerHTML=html;
+ }catch(e){document.getElementById("app").innerHTML=`<div class="card"><div class="error">${e.message}</div><p class="small">Open this app on a normal internet connection. Sleeper's API must be reachable from the phone.</p><button onclick="refresh()">Retry</button></div>`}
+}
+refresh();setInterval(refresh,10000);
+</script></body></html>
